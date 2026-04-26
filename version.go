@@ -1,5 +1,7 @@
 // Package ning2 provides a lightweight Go web framework and crawler toolkit.
 //
+// Licensed under the Apache License, Version 2.0
+//
 // Version: 1.0.0
 package ning2
 

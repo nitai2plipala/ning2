@@ -15,7 +15,7 @@ package main
 
 import (
     "net/http"
-    "github.com/yourname/yourrepo/framework/ning2"
+    "github.com/nitai2plipala/ning2"
 )
 
 func main() {
@@ -38,15 +38,15 @@ func main() {
 
 ## 文档
 
-- [ning2 框架文档](./ning2.md)
+- [Ning2 框架文档](./ning2.md)
 - [spider 爬虫文档](./spider.md)
 
 ## 测试
 
 ```bash
-go test ./framework/ning2/... -v
+go test ./... -v
 ```
 
 ## 许可证
 
-MIT
+Apache License 2.0 - see [LICENSE](./LICENSE) file
