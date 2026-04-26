@@ -51,7 +51,10 @@ func (mux *RouteMux) RootPath(handle HandleFunc, methods ...string) error {
 	return mux.Handle("/", handle, methods...)
 }
 
-func (mux *RouteMux) Resource(pattern string, handle HandleFunc) error {
+// Resource 注册静态文件服务
+// pattern: 路由前缀，如 "/static/" 或 "/"
+// dirPath: 静态文件目录，如 "./public"
+func (mux *RouteMux) Resource(pattern, dirPath string) error {
 
 	if !strings.HasSuffix(pattern, "/") {
 		return errors.New("ning2: Resources pattern can only end with '/'")
@@ -59,13 +62,11 @@ func (mux *RouteMux) Resource(pattern string, handle HandleFunc) error {
 
 	// 根路径特殊处理
 	if pattern == "/" {
-		// 使用通配符路由 /*filepath
-		return mux.Handle("/*filepath", handle, "GET")
+		return mux.Handle("/*filepath", StripPrefix("", dirPath), "GET")
 	}
 
-	pattern = strings.Join([]string{pattern, "?static"}, "")
-
-	return mux.Handle(pattern, handle, "GET")
+	fullPattern := pattern + "?static"
+	return mux.Handle(fullPattern, StripPrefix(pattern, dirPath), "GET")
 }
 
 func (mux *RouteMux) Register(pattern string, methodHandle map[string]HandleFunc) error {
