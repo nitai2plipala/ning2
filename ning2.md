@@ -94,17 +94,13 @@ mux.Handle("/static/?file", handler, "GET")
 ### Static File Serving
 
 ```go
-// Serve files from /static/ path
+// Use Resource (recommended) - two params: pattern and dirPath
+mux.Resource("/static/", "./static")    // /static/* -> ./static/*
+mux.Resource("/", "./public")           // /* -> ./public/*
+
+// Or use StripPrefix directly
 mux.Handle("/static/*filepath", ning2.StripPrefix("/static", "./static"), "GET")
-
-// Serve files from root path
 mux.Handle("/*filepath", ning2.StripPrefix("", "./public"), "GET")
-
-// Or use Resource (pattern must end with /)
-mux.Resource("/static/", ning2.StripPrefix("/static", "./static"))
-
-// Root path static files
-mux.Resource("/", ning2.StripPrefix("", "asset"))
 ```
 
 ### Route Priority
