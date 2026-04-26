@@ -24,13 +24,54 @@ func main() {
     // Enable Gzip compression
     mux.Use(ning2.CompressionMiddleware)
     
+    // Basic route - GET
     mux.Handle("/hello", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
         return c.String(200, "Hello, Ning2!")
     }, "GET")
     
+    // Route with parameters - /user/123
+    mux.Handle("/user/:id", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
+        userID := c.Param["id"]
+        return c.JSON(200, map[string]string{"user_id": userID})
+    }, "GET")
+    
+    // Multiple HTTP methods
+    mux.Handle("/api/data", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
+        return c.JSON(200, map[string]string{"status": "ok"})
+    }, "GET", "POST", "PUT", "DELETE")
+    
+    // Wildcard route - /files/*
+    mux.Handle("/files/*path", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
+        return c.String(200, "File: "+c.Param["path"])
+    }, "GET")
+    
+    // Query parameters
+    mux.Handle("/search", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
+        query := c.QueryParam("q", "url", 0)
+        return c.JSON(200, map[string]string{"query": query})
+    }, "GET")
+    
+    // HTML response
+    mux.Handle("/page", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
+        return c.HTML(200, "<html><body><h1>Hello World</h1></body></html>")
+    }, "GET")
+    
+    // Static file serving
+    mux.Handle("/static/*filepath", ning2.StripPrefix("/static", "./public"), "GET")
+    
     http.ListenAndServe(":8080", mux)
 }
 ```
+
+### Core Features
+
+| Feature | Description |
+|---------|-------------|
+| Routing | Static, parameter, wildcard, regexp routes |
+| Response | String, JSON, HTML, File, Redirect |
+| Middleware | Before, After, Middle hooks |
+| Compression | Gzip response compression |
+| Context | Query, Form, JSON params |
 
 ## Modules
 
