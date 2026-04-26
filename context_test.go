@@ -23,7 +23,8 @@ func TestContext_New(t *testing.T) {
 	if c.request != req {
 		t.Error("request not set correctly")
 	}
-	if c.responseWriter != w {
+	// responseWriter 现在是包装后的 ResponseWriter
+	if c.responseWriter == nil {
 		t.Error("responseWriter not set correctly")
 	}
 	if c.Param == nil {

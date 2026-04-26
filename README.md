@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **Web 框架** - 高性能路由、Middleware 支持、Context 封装
+- **Web 框架** - 高性能路由、Middleware 支持、Context 封装、Gzip 压缩
 - **爬虫工具** - HTTP 客户端、HTML 解析、Cookie 管理
 - **User-Agent 解析** - 浏览器/OS/设备/机器人检测
 
@@ -20,6 +20,9 @@ import (
 
 func main() {
     mux := ning2.NewMux()
+    
+    // 开启 Gzip 压缩
+    mux.Use(ning2.CompressionMiddleware)
     
     mux.Handle("/hello", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
         return c.String(200, "Hello, Ning2!")

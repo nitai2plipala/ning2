@@ -1,6 +1,7 @@
 package ning2
 
 import (
+	"io"
 	"net/http"
 	"sync"
 )
@@ -94,6 +95,54 @@ type Client struct {
 	Device    string
 	UserAgent  string
 	Standard   string
+}
+
+// ResponseWriter 包装 http.ResponseWriter，支持状态码和 Header 追踪
+type ResponseWriter struct {
+	http.ResponseWriter
+	Code    int
+	Written bool
+}
+
+// NewResponseWriter 创建新的 ResponseWriter 包装器
+func NewResponseWriter(w http.ResponseWriter) *ResponseWriter {
+	return &ResponseWriter{
+		ResponseWriter: w,
+		Code:           200,
+		Written:        false,
+	}
+}
+
+// WriteHeader 追踪状态码
+func (r *ResponseWriter) WriteHeader(code int) {
+	r.Code = code
+	r.Written = true
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// Write 追踪写入状态
+func (r *ResponseWriter) Write(p []byte) (int, error) {
+	if !r.Written {
+		r.WriteHeader(200)
+	}
+	return r.ResponseWriter.Write(p)
+}
+
+// CompressWriter 压缩响应包装器
+type CompressWriter struct {
+	io.Writer
+	http.ResponseWriter
+}
+
+// Write 写入压缩数据
+func (c *CompressWriter) Write(p []byte) (int, error) {
+	return c.Writer.Write(p)
+}
+
+// WriteHeader 设置响应头
+func (c *CompressWriter) WriteHeader(code int) {
+	c.ResponseWriter.Header().Del("Content-Length")
+	c.ResponseWriter.WriteHeader(code)
 }
 
 

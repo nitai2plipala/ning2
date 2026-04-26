@@ -30,7 +30,7 @@ func NewMux() *RouteMux {
 func (mux *RouteMux) NewContext(r *http.Request, w http.ResponseWriter) *Context {
 	c := mux.syncPool.Get().(*Context)
 	c.request = r
-	c.responseWriter = w
+	c.responseWriter = NewResponseWriter(w)
 	c.Pattern = ""
 	c.Param = make(map[string]string)
 	return c
@@ -61,7 +61,8 @@ func (mux *RouteMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		c.Client.Standard = ".p"
 	}
 
-	Hunter(w, r, c)
+	// 使用包装后的 ResponseWriter，支持 middleware 替换
+	Hunter(c.responseWriter, r, c)
 
 	mux.syncPool.Put(c)
 }

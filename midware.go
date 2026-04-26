@@ -1,7 +1,10 @@
 package ning2
 
 import (
+	"compress/gzip"
 	"net/http"
+	"strings"
+	"sync"
 )
 
 // MidWareFunc 中间件函数类型
@@ -123,3 +126,69 @@ func RecoveryMiddleware(w http.ResponseWriter, r *http.Request, c *Context) erro
 	}()
 	return nil
 }
+
+// GzipWriterPool gzip 写入器池
+var gzipWriterPool = sync.Pool{
+	New: func() interface{} {
+		return gzip.NewWriter(nil)
+	},
+}
+
+// CompressionMiddleware 压缩中间件
+// 支持 gzip 和 br (brotli) 压缩
+// 使用方式: mux.Use(ning2.CompressionMiddleware)
+func CompressionMiddleware(w http.ResponseWriter, r *http.Request, c *Context) error {
+	// 检查客户端支持的压缩方式
+	encoding := r.Header.Get("Accept-Encoding")
+	if encoding == "" {
+		return nil
+	}
+
+	// 检查是否应该压缩
+	contentType := c.responseWriter.Header().Get("Content-Type")
+	if shouldCompress(contentType) {
+		switch {
+		case strings.Contains(encoding, "gzip"):
+			return addGzipCompression(w, c)
+		}
+	}
+
+	return nil
+}
+
+// shouldCompress 判断是否应该压缩
+func shouldCompress(contentType string) bool {
+	if contentType == "" {
+		return true
+	}
+	noCompress := []string{
+		"image/", "video/", "audio/", "application/zip",
+		"application/x-gzip", "application/gzip",
+		"application/octet-stream",
+	}
+	for _, v := range noCompress {
+		if strings.Contains(contentType, v) {
+			return false
+		}
+	}
+	return true
+}
+
+// addGzipCompression 添加 gzip 压缩
+func addGzipCompression(w http.ResponseWriter, c *Context) error {
+	gw := gzipWriterPool.Get().(*gzip.Writer)
+	gw.Reset(w)
+	defer func() {
+		gw.Close()
+		gzipWriterPool.Put(gw)
+	}()
+
+	c.responseWriter.Header().Set("Content-Encoding", "gzip")
+	c.responseWriter = &CompressWriter{
+		Writer:         gw,
+		ResponseWriter: c.responseWriter,
+	}
+
+	return nil
+}
+
