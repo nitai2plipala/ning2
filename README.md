@@ -57,7 +57,8 @@ func main() {
     }, "GET")
     
     // Static file serving
-    mux.Handle("/static/*filepath", ning2.StripPrefix("/static", "./public"), "GET")
+    mux.Resource("/static/", "./public")  // /static/* -> ./public/*
+    mux.Resource("/", "./public")         // root path static files
     
     http.ListenAndServe(":8080", mux)
 }
