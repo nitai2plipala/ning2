@@ -17,11 +17,11 @@ var (
 
 func (mux *RouteMux) Handle(pattern string, handle HandleFunc, methods ...string) error {
 	if handle == nil {
-		return errors.New("plipala http: nil handleFunc")
+		return errors.New("ning2: nil handleFunc")
 	}
 
 	if len(methods) == 0 {
-		return errors.New("plipala http: at least one method is required")
+		return errors.New("ning2: at least one method is required")
 	}
 
 	methodHandle := make(map[string]HandleFunc)
@@ -43,10 +43,10 @@ func (mux *RouteMux) Handle(pattern string, handle HandleFunc, methods ...string
 
 func (mux *RouteMux) RootPath(handle HandleFunc, methods ...string) error {
 	if handle == nil {
-		return errors.New("plipala http: nil handleFunc")
+		return errors.New("ning2: nil handleFunc")
 	}
 	if len(methods) == 0 {
-		return errors.New("plipala http: at least one method is required")
+		return errors.New("ning2: at least one method is required")
 	}
 	return mux.Handle("/", handle, methods...)
 }
@@ -54,7 +54,13 @@ func (mux *RouteMux) RootPath(handle HandleFunc, methods ...string) error {
 func (mux *RouteMux) Resource(pattern string, handle HandleFunc) error {
 
 	if !strings.HasSuffix(pattern, "/") {
-		return errors.New("plipala.Resources pattern can only end with '/'")
+		return errors.New("ning2: Resources pattern can only end with '/'")
+	}
+
+	// 根路径特殊处理
+	if pattern == "/" {
+		// 使用通配符路由 /*filepath
+		return mux.Handle("/*filepath", handle, "GET")
 	}
 
 	pattern = strings.Join([]string{pattern, "?static"}, "")
@@ -64,7 +70,7 @@ func (mux *RouteMux) Resource(pattern string, handle HandleFunc) error {
 
 func (mux *RouteMux) Register(pattern string, methodHandle map[string]HandleFunc) error {
 	if pattern == "" {
-		return errors.New("plipala: pattern cannot be empty")
+		return errors.New("ning2: pattern cannot be empty")
 	}
 
 	// 根路径处理
