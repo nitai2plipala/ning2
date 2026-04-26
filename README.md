@@ -1,14 +1,14 @@
 # Ning2
 
-轻量级 Go Web 框架 + 爬虫工具库
+A lightweight Go Web framework + Crawler toolkit
 
-## 特性
+## Features
 
-- **Web 框架** - 高性能路由、Middleware 支持、Context 封装、Gzip 压缩
-- **爬虫工具** - HTTP 客户端、HTML 解析、Cookie 管理
-- **User-Agent 解析** - 浏览器/OS/设备/机器人检测
+- **Web Framework** - High-performance routing, Middleware support, Context utilities, Gzip compression
+- **Crawler Toolkit** - HTTP client, HTML parsing, Cookie management
+- **User-Agent Parsing** - Browser/OS/Device/Bot detection
 
-## 快速开始
+## Quick Start
 
 ```go
 package main
@@ -21,7 +21,7 @@ import (
 func main() {
     mux := ning2.NewMux()
     
-    // 开启 Gzip 压缩
+    // Enable Gzip compression
     mux.Use(ning2.CompressionMiddleware)
     
     mux.Handle("/hello", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
@@ -32,24 +32,24 @@ func main() {
 }
 ```
 
-## 模块
+## Modules
 
-| 模块 | 说明 |
-|------|------|
-| `ning2` | Web 框架核心 |
-| `ning2/spider` | 爬虫工具 |
+| Module | Description |
+|--------|-------------|
+| `ning2` | Web framework core |
+| `ning2/spider` | Crawler toolkit |
 
-## 文档
+## Documentation
 
-- [Ning2 框架文档](./ning2.md)
-- [spider 爬虫文档](./spider.md)
+- [Ning2 Framework Docs](./ning2.md)
+- [Spider Crawler Docs](./spider.md)
 
-## 测试
+## Testing
 
 ```bash
 go test ./... -v
 ```
 
-## 许可证
+## License
 
 Apache License 2.0 - see [LICENSE](./LICENSE) file
