@@ -1,29 +1,32 @@
-# Ning2 Web 框架
+# Ning2 Web Framework
 
-轻量级 Go Web 框架，提供高性能路由、Middleware 支持和丰富的 Context 工具。
+A lightweight Go Web framework providing high-performance routing, Middleware support, rich Context utilities, and Gzip compression.
 
-## 目录
+## Table of Contents
 
-- [快速开始](#快速开始)
-- [路由](#路由)
+- [Quick Start](#quick-start)
+- [Routing](#routing)
 - [Context](#context)
 - [Middleware](#middleware)
 - [User-Agent](#user-agent)
-- [响应方法](#响应方法)
-- [模板渲染](#模板渲染)
+- [Response Methods](#response-methods)
+- [Template Rendering](#template-rendering)
 
-## 快速开始
+## Quick Start
 
 ```go
 package main
 
 import (
     "net/http"
-    "ning2"
+    "github.com/nitai2plipala/ning2"
 )
 
 func main() {
     mux := ning2.NewMux()
+    
+    // Enable Gzip compression
+    mux.Use(ning2.CompressionMiddleware)
     
     mux.Handle("/hello", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
         return c.String(200, "Hello, Ning2!")
@@ -33,276 +36,297 @@ func main() {
 }
 ```
 
-## 路由
+## Routing
 
-### 基本路由
+### Basic Routing
 
 ```go
 mux := ning2.NewMux()
 
-// GET 路由
+// GET route
 mux.Handle("/users", handler, "GET")
 
-// POST 路由
+// POST route
 mux.Handle("/users", handler, "POST")
 
-// 多方法路由
+// Multiple methods
 mux.Handle("/api", handler, "GET", "POST", "PUT", "DELETE")
 
-// 根路由
+// Root path
 mux.RootPath(handler, "GET")
 ```
 
-### 路由参数
+### Route Parameters
 
 ```go
-// 参数路由 :id
+// Parameter route :id
 mux.Handle("/users/:id", handler, "GET")
-// 访问 /users/123 -> c.Param["id"] = "123"
+// Access /users/123 -> c.Param["id"] = "123"
 
-// 多参数
+// Multiple parameters
 mux.Handle("/users/:userId/posts/:postId", handler, "GET")
 ```
 
-### 通配符路由
+### Wildcard Routes
 
 ```go
-// 匹配剩余所有路径
+// Match remaining path
 mux.Handle("/api/*path", handler, "GET")
-// 访问 /api/v1/users -> c.Param["path"] = "v1/users"
+// Access /api/v1/users -> c.Param["path"] = "v1/users"
 ```
 
-### 正则路由
+### Regexp Routes
 
 ```go
-// 正则匹配 <name>pattern
+// Regexp match <name>pattern
 mux.Handle("/items/<id>[0-9]+", handler, "GET")
-// 匹配 /items/123 但不匹配 /items/abc
+// Matches /items/123 but not /items/abc
 ```
 
-### 静态别名路由
+### Static Alias Routes
 
 ```go
-// 静态路由 /?alias
+// Static route /?alias
 mux.Handle("/static/?file", handler, "GET")
-// 访问 /static/js/app.js -> c.Param["file"] = "js/app.js"
+// Access /static/js/app.js -> c.Param["file"] = "js/app.js"
 ```
 
-### 路由优先级
+### Static File Serving
 
-1. 精确路由 (priority: 10)
-2. Default 类型 (priority: 5)
-3. Regexp 类型 (priority: 4)
-4. Param 类型 (priority: 3)
-5. Static 类型 (priority: 2)
-6. Whole 类型 (priority: 1)
+```go
+// Serve files from /static/ path
+mux.Handle("/static/*filepath", ning2.StripPrefix("/static", "./static"), "GET")
+
+// Serve files from root path
+mux.Handle("/*filepath", ning2.StripPrefix("", "./public"), "GET")
+
+// Or use Resource (pattern must end with /)
+mux.Resource("/static/", ning2.StripPrefix("/static", "./static"))
+
+// Root path static files
+mux.Resource("/", ning2.StripPrefix("", "asset"))
+```
+
+### Route Priority
+
+1. Exact routes (priority: 10)
+2. Default type (priority: 5)
+3. Regexp type (priority: 4)
+4. Param type (priority: 3)
+5. Static type (priority: 2)
+6. Whole type (priority: 1)
 
 ## Context
 
-### 创建 Context
+### Creating Context
 
 ```go
-// 通过 Mux 自动创建
+// Created automatically by Mux
 mux.ServeHTTP(w, r)
-// 在 handler 中使用 c *ning2.Context
+// Use c *ning2.Context in handler
 ```
 
-### 获取参数
+### Getting Parameters
 
 ```go
-// URL Query 参数
+// URL Query parameters
 name := c.QueryParam("name", "url", 0)
 names := c.QueryParams("name", "url")
 
-// Form 参数
+// Form parameters
 name := c.QueryParam("name", "form", 0)
 
-// JSON 参数
+// JSON parameters
 name := c.QueryParam("name", "json", 0)
 ```
 
-### 客户端信息
+### Client Information
 
 ```go
-// 获取客户端 IP
+// Get client IP
 ip := c.ClientIP()
 
-// 获取协议
-scheme := c.Scheme() // "http" 或 "https"
+// Get protocol
+scheme := c.Scheme() // "http" or "https"
 
-// 获取完整 URL
+// Get full URL
 url := c.WebSite()
 
-// 客户端信息 (通过 User-Agent 解析)
-c.Client.Device    // 设备类型: iPhone, iPad, Android, Desktop
-c.Client.Browser.Name   // 浏览器: Chrome, Firefox, Safari, Edge, Opera
-c.Client.OS.Name   // 操作系统: Windows, macOS, iOS, Android, Linux
-c.Client.Robot     // 是否机器人
-c.Client.Standard  // 客户端标准: .m (移动), .t (平板), .p (桌面)
+// Client info (via User-Agent parsing)
+c.Client.Device    // Device type: iPhone, iPad, Android, Desktop
+c.Client.Browser.Name   // Browser: Chrome, Firefox, Safari, Edge, Opera
+c.Client.OS.Name   // OS: Windows, macOS, iOS, Android, Linux
+c.Client.Robot     // Is robot
+c.Client.Standard  // Client standard: .m (mobile), .t (tablet), .p (desktop)
 ```
 
 ## Middleware
 
-### 创建 Middleware
+### Creating Middleware
 
 ```go
 m := ning2.NewMidWare()
 
-// 添加前置中间件 (请求前执行)
+// Add before middleware (executes before request)
 m.UseBefore(func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
-    // 处理请求前逻辑
+    // Pre-request logic
     return nil
 })
 
-// 添加后置中间件 (响应后执行)
+// Add after middleware (executes after response)
 m.UseAfter(func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
-    // 处理响应后逻辑
+    // Post-response logic
     return nil
 })
 
-// 添加通用中间件
+// Add general middleware
 m.Use(func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
     return nil
 })
 ```
 
-### 使用 Middleware
+### Using Middleware
 
 ```go
-handler := mux.FindHandle(req, c)
-wrappedHandler := m.Handler
+// Add to mux
+mux.Use(ning2.CompressionMiddleware)
 
-// 执行
-_ = wrappedHandler(w, req, c, handler)
+// Or use MidWare chain
+m := ning2.NewMidWare()
+m.UseBefore(beforeFn)
+m.UseAfter(afterFn)
 ```
 
-### 内置 Middleware
+### Built-in Middleware
 
 ```go
-// 日志中间件
+// Gzip compression (enable with mux.Use(ning2.CompressionMiddleware))
+ning2.CompressionMiddleware
+
+// Logger middleware
 ning2.LoggerMiddleware
 
-// 恢复中间件 (防止 panic)
+// Recovery middleware (prevents panic crash)
 ning2.RecoveryMiddleware
 ```
 
 ## User-Agent
 
-### 解析 User-Agent
+### Parsing User-Agent
 
 ```go
 ua := ning2.Parse(r.UserAgent())
 
-// 浏览器信息
+// Browser info
 ua.Name     // Chrome, Firefox, Safari, Edge, Opera, Unknown
-ua.Version  // 版本号
+ua.Version  // Version
 
-// 操作系统
+// Operating system
 ua.OS       // Windows, macOS, iOS, Android, Linux, Unknown
 ua.OSVersion
 
-// 设备类型
+// Device type
 ua.Device   // iPhone, iPad, Android, Windows Phone, Desktop
-ua.Mobile   // 是否移动设备
-ua.Tablet   // 是否平板
-ua.Desktop  // 是否桌面设备
+ua.Mobile   // Is mobile device
+ua.Tablet   // Is tablet
+ua.Desktop  // Is desktop device
 
-// 机器人检测
-ua.Bot      // 是否机器人 (Googlebot, Bingbot, curl, wget 等)
+// Bot detection
+ua.Bot      // Is bot (Googlebot, Bingbot, curl, wget, etc.)
 ```
 
-## 响应方法
+## Response Methods
 
-### 基本响应
+### Basic Response
 
 ```go
-// 返回字符串
+// Return string
 c.String(200, "Hello")
 
-// 返回 JSON
+// Return JSON
 c.JSON(200, map[string]string{"key": "value"})
 
-// 返回 HTML
+// Return HTML
 c.HTML(200, "<html><body>Hello</body></html>")
 
-// 无内容响应
+// No content response
 c.NoContent(204)
 
-// 重定向
+// Redirect
 c.Redirect(302, "/new-location")
 ```
 
-### 错误响应
+### Error Response
 
 ```go
-// 返回错误 (状态码 400-600)
+// Return error (status code 400-600)
 c.Error(500, nil)
 c.Error(400, errors.New("bad request"))
 ```
 
-## 模板渲染
+## Template Rendering
 
-### 基本渲染
+### Basic Rendering
 
 ```go
-// 渲染模板文件
+// Render template file
 c.Render(200, "templates/index.html", data)
 
-// 渲染多个模板文件
+// Render multiple template files
 c.RenderTemplate(200, "layout.html", data, []string{"header.html", "footer.html"})
 ```
 
-### 响应式模板
+### Responsive Templates
 
 ```go
-// 根据客户端类型自动选择模板
-// 移动端: index.m.html
-// 平板端: index.t.html
-// 桌面端: index.p.html
+// Auto-select template based on client type
+// Mobile: index.m.html
+// Tablet: index.t.html
+// Desktop: index.p.html
 c.HtmlGlob(200, "templates/index.html", data)
 ```
 
-### 模板函数
+### Template Functions
 
-框架内置以下模板函数：
+Built-in template functions:
 
 ```go
-// 类型转换
-{{Uint .Value}}  // 转换为 uint
-{{String .Value}} // 转换为字符串
+// Type conversion
+{{Uint .Value}}  // Convert to uint
+{{String .Value}} // Convert to string
 
-// 算术运算
-{{Add "uint" 1 2 3}}  // uint 相加
-{{Add "int" 1 2 3}}   // int 相加
+// Arithmetic
+{{Add "uint" 1 2 3}}  // uint addition
+{{Add "int" 1 2 3}}   // int addition
 ```
 
-## 辅助函数
+## Helper Functions
 
-### 静态文件服务
+### Static File Serving
 
 ```go
-// 简单静态文件服务
+// Simple static file serving
 mux.Handle("/static/*filepath", ning2.StripPrefix("/static", "./static"), "GET")
 
-// 或使用标准库
+// Or use standard library
 mux.Handle("/files/*filepath", http.FileServer(http.Dir("./files")), "GET")
 ```
 
-### HTTPS 重定向
+### HTTPS Redirect
 
 ```go
-// HTTP 到 HTTPS 重定向
+// HTTP to HTTPS redirect
 ning2.ListenServeAndToHttps(":80")
 ```
 
-### 404 处理
+### 404 Handler
 
 ```go
-// 默认 404 处理器
+// Default 404 handler
 ning2.NotFound(w, r, c)
 ```
 
-## 类型定义
+## Type Definitions
 
 ### HandleFunc
 
@@ -316,9 +340,9 @@ type HandleFunc func(http.ResponseWriter, *http.Request, *Context) error
 type Context struct {
     request        *http.Request
     responseWriter http.ResponseWriter
-    Pattern        string           // 匹配的路由模式
-    Param          map[string]string // 路由参数
-    Client         Client           // 客户端信息
+    Pattern        string           // Matched route pattern
+    Param          map[string]string // Route parameters
+    Client         Client           // Client information
 }
 ```
 
@@ -336,10 +360,10 @@ type Client struct {
 }
 ```
 
-## 性能优化
+## Performance Optimization
 
-- **路由缓存**: 精确路由使用 O(1) 缓存查找
-- **正则缓存**: 正则表达式编译结果缓存
-- **Context 池**: 使用 sync.Pool 复用 Context 对象
-- **Body 缓存**: JSON 请求体只读取一次
-- **FuncMap 缓存**: 模板函数映射全局只创建一次
+- **Route Cache**: Exact routes use O(1) cache lookup
+- **Regexp Cache**: Regex expression compilation results cached
+- **Context Pool**: Use sync.Pool to reuse Context objects
+- **Body Cache**: JSON request body read only once
+- **FuncMap Cache**: Template function map created globally only once
