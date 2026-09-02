@@ -1,11 +1,17 @@
 package ning2
 
 import (
+	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
 )
+
+// debugMode 控制是否输出路由匹配调试信息
+// 通过环境变量 NING2_DEBUG=1 开启
+var debugMode = os.Getenv("NING2_DEBUG") == "1"
 
 // 正则表达式缓存
 var (
@@ -39,8 +45,18 @@ func (mux *RouteMux) FindHandleByPath(urlPath, method string, c *Context) Handle
 	// 根路径处理
 	if urlPath == "/" || urlPath == "" {
 		if root.methodHandle != nil {
-			c.Pattern = "/"
-			return root.methodHandle[method]
+			if handler, ok := root.methodHandle[method]; ok {
+				c.Pattern = "/"
+				return handler
+			}
+		}
+		// 如果根路径没有注册 handler，继续走 matchNode
+		// 让 /?static 等节点有机会匹配根路径
+		arbiter := matchNode(root, "/", method)
+		if arbiter.handleFunc != nil {
+			c.Param = arbiter.mimicry
+			c.Pattern = arbiter.pattern
+			return arbiter.handleFunc
 		}
 		return NotFound
 	}
@@ -55,145 +71,159 @@ func (mux *RouteMux) FindHandleByPath(urlPath, method string, c *Context) Handle
 		}
 	}
 
-	// 2. 遍历子节点查找最佳匹配
-	var matchedArbiter Arbiter
-	matchedArbiter.handleFunc = NotFound
-	matchedArbiter.mimicry = make(map[string]string)
+	// 2. 递归遍历路由树查找最佳匹配
+	arbiter := matchNode(root, urlPath, method)
 
-	for _, child := range root.children {
-		arbiter := child.findHandleWithMethod(urlPath, method)
-		if arbiter.handleFunc != nil && arbiter.priority > matchedArbiter.priority {
-			matchedArbiter = arbiter
-		}
-		// 精确匹配立即返回（完全匹配 priority >= 10）
-		if arbiter.priority >= 10 && arbiter.handleFunc != nil {
-			break
-		}
+	if debugMode {
+		log.Printf("[DEBUG] FindHandleByPath: urlPath=%q method=%q -> priority=%d pattern=%q mimicry=%v handleFunc=%v",
+			urlPath, method, arbiter.priority, arbiter.pattern, arbiter.mimicry, arbiter.handleFunc != nil)
 	}
 
-	c.Param = matchedArbiter.mimicry
-	c.Pattern = matchedArbiter.pattern
+	c.Param = arbiter.mimicry
+	c.Pattern = arbiter.pattern
 
-	return matchedArbiter.handleFunc
+	if arbiter.handleFunc == nil {
+		return NotFound
+	}
+	return arbiter.handleFunc
 }
 
-func (node *Node) findHandleWithMethod(urlPath, method string) Arbiter {
-	arbiter := Arbiter{
+// priorityValue 返回节点类型的优先级权重
+// default(5) > regexp(4) > param(3) > static(2) > whole(1) > root(0)
+func priorityValue(nType NodeType) uint {
+	switch nType {
+	case "default":
+		return 5
+	case "regexp":
+		return 4
+	case "param":
+		return 3
+	case "static":
+		return 2
+	case "whole":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// matchNode 从 node 开始递归匹配 urlPath，返回最佳匹配结果
+func matchNode(node *Node, urlPath, method string) Arbiter {
+	pathRegex := getPathRegex()
+	best := Arbiter{
 		mimicry:    make(map[string]string),
 		handleFunc: nil,
+		priority:   0,
 	}
 
-	// 使用缓存的路径正则
-	pathRegex := getPathRegex()
-
-	// 遍历子节点
+	// 遍历子节点，按优先级从高到低尝试匹配
 	for _, child := range node.children {
-		path := pathRegex.FindString(urlPath)
+		var (
+			matched    bool
+			paramValue string
+			restPath   string // 剩余路径
+		)
+
+		seg := pathRegex.FindString(urlPath)
 
 		switch child.nType {
 		case "default":
-			if path == child.pattern {
-				urlPath = strings.TrimPrefix(urlPath, path)
-				arbiter.pattern += child.pattern
-				arbiter.priority += 5
-			} else {
+			if len(seg) == 0 {
 				continue
+			}
+			if seg == child.pattern {
+				matched = true
+				restPath = strings.TrimPrefix(urlPath, seg)
 			}
 
 		case "regexp":
-			rew := getCompiledRegexp("^/" + child.regexp + "$")
-			if rew.MatchString(path) {
-				arbiter.mimicry[child.alias] = path[1:]
-				urlPath = strings.TrimPrefix(urlPath, path)
-				arbiter.pattern += child.pattern
-				arbiter.priority += 4
-			} else {
+			if len(seg) == 0 {
 				continue
+			}
+			rew := getCompiledRegexp("^/" + child.regexp + "$")
+			if rew.MatchString(seg) {
+				matched = true
+				paramValue = seg[1:]
+				restPath = strings.TrimPrefix(urlPath, seg)
 			}
 
 		case "param":
-			arbiter.mimicry[child.alias] = path[1:]
-			urlPath = strings.TrimPrefix(urlPath, path)
-			arbiter.pattern += child.pattern
-			arbiter.priority += 3
+			if len(seg) == 0 {
+				continue
+			}
+			matched = true
+			paramValue = seg[1:]
+			restPath = strings.TrimPrefix(urlPath, seg)
 
 		case "static":
-			arbiter.mimicry[child.alias] = urlPath[1:]
-			urlPath = ""
-			arbiter.pattern += child.pattern
-			arbiter.priority += 2
+			// static 匹配整个剩余路径
+			if len(urlPath) == 0 {
+				continue
+			}
+			matched = true
+			paramValue = urlPath[1:]
+			restPath = ""
 
 		case "whole":
-			// whole 匹配剩余所有路径
-			// 例如 /api/*path 匹配 /api/v1/users，提取 v1/users
-			prefix := strings.TrimPrefix(child.pattern, "/*")
-			// 使用完整 urlPath 而非只取第一段
-			if strings.HasPrefix(urlPath, "/"+prefix) {
-				// 提取剩余所有路径
-				rest := strings.TrimPrefix(urlPath, "/"+prefix)
-				arbiter.mimicry[child.alias] = rest
-				urlPath = ""
-				arbiter.pattern += child.pattern
-				arbiter.priority += 1
-			} else {
+			// whole 匹配整个剩余路径，固定用 "path" 作为 key
+			matched = true
+			rest := urlPath
+			if len(rest) > 0 && rest[0] == '/' {
+				rest = rest[1:]
+			}
+			paramValue = rest
+			restPath = ""
+		}
+
+		if !matched {
+			continue
+		}
+
+		// 递归匹配剩余路径
+		var sub Arbiter
+		if restPath == "" {
+			// 路径已消费完，检查当前节点是否有 handler
+			sub = Arbiter{
+				mimicry:    make(map[string]string),
+				pattern:    child.pattern,
+				priority:   priorityValue(child.nType),
+				handleFunc: nil,
+			}
+			if child.methodHandle != nil {
+				if h, ok := child.methodHandle[method]; ok {
+					sub.handleFunc = h
+				}
+			}
+		} else if child.nType == "whole" || child.nType == "static" {
+			// whole/static 已消费所有路径，不应再有剩余
+			continue
+		} else {
+			// 递归匹配子节点的子节点
+			sub = matchNode(child, restPath, method)
+			if sub.handleFunc == nil {
 				continue
+			}
+			// 累加 pattern 和 priority
+			sub.pattern = child.pattern + sub.pattern
+			sub.priority += priorityValue(child.nType)
+		}
+
+		// 存储参数
+		if paramValue != "" || child.alias != "" {
+			if child.alias != "" {
+				sub.mimicry[child.alias] = paramValue
+			}
+		}
+
+		// 选择 priority 最高的匹配
+		if sub.handleFunc != nil && sub.priority > best.priority {
+			best = sub
+			// 精确匹配（default 类型且路径完全消费）立即返回
+			if child.nType == "default" && restPath == "" {
+				break
 			}
 		}
 	}
 
-	// 处理当前节点
-	switch node.nType {
-	case "default":
-		path := pathRegex.FindString(urlPath)
-		if path == node.pattern {
-			urlPath = strings.TrimPrefix(urlPath, path)
-			arbiter.priority += 5
-		}
-
-	case "regexp":
-		path := pathRegex.FindString(urlPath)
-		rew := getCompiledRegexp("^/" + node.regexp + "$")
-		if rew.MatchString(path) {
-			arbiter.mimicry[node.alias] = path[1:]
-			urlPath = strings.TrimPrefix(urlPath, path)
-			arbiter.priority += 4
-		}
-
-	case "param":
-		path := pathRegex.FindString(urlPath)
-		arbiter.mimicry[node.alias] = path[1:]
-		urlPath = strings.TrimPrefix(urlPath, path)
-		arbiter.priority += 3
-
-	case "static":
-		arbiter.mimicry[node.alias] = urlPath[1:]
-		urlPath = ""
-		arbiter.priority += 2
-
-	case "whole":
-		// whole 匹配剩余所有路径
-		prefix := strings.TrimPrefix(node.pattern, "/*")
-		// 使用完整 urlPath 而非只取第一段
-		if strings.HasPrefix(urlPath, "/"+prefix) {
-			rest := strings.TrimPrefix(urlPath, "/"+prefix)
-			arbiter.mimicry[node.alias] = rest
-			urlPath = ""
-			arbiter.priority += 1
-		}
-	}
-
-	// 检查是否完全匹配
-	if urlPath == "" {
-		arbiter.pattern += node.pattern
-		if node.methodHandle != nil {
-			arbiter.handleFunc = node.methodHandle[method]
-		}
-	}
-
-	// 如果没有匹配，返回 NotFound
-	if arbiter.handleFunc == nil {
-		arbiter.handleFunc = NotFound
-	}
-
-	return arbiter
+	return best
 }

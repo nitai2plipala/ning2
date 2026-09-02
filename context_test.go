@@ -157,9 +157,9 @@ func TestContext_Response_Error_InvalidCode(t *testing.T) {
 	}
 }
 
-// ==================== Query 参数测试 ====================
+// ==================== Query / Bind 参数测试 ====================
 
-func TestContext_QueryParam_URL(t *testing.T) {
+func TestContext_Query(t *testing.T) {
 	mux := NewMux()
 	mux.Handle("/test", func(w http.ResponseWriter, r *http.Request, c *Context) error {
 		return nil
@@ -169,127 +169,90 @@ func TestContext_QueryParam_URL(t *testing.T) {
 	w := httptest.NewRecorder()
 	c := mux.NewContext(req, w)
 
-	// 单值查询
-	if c.QueryParam("name", "url", 0) != "john" {
-		t.Error("QueryParam url failed")
+	// 单值查询（返回第一个）
+	if c.Query("name") != "john" {
+		t.Error("Query name failed")
 	}
-	// 索引越界
-	if c.QueryParam("name", "url", 10) != "" {
-		t.Error("QueryParam out of bounds should return empty")
+	if c.Query("age") != "25" {
+		t.Error("Query age failed")
 	}
-	// 多值查询
-	if c.QueryParam("name", "url", 1) != "jane" {
-		t.Error("QueryParam index 1 failed")
-	}
-	// 不存在的 key
-	if c.QueryParam("nonexist", "url", 0) != "" {
+	// 不存在的 key 返回空字符串
+	if c.Query("nonexist") != "" {
 		t.Error("nonexist key should return empty")
 	}
 }
 
-func TestContext_QueryParams_URL(t *testing.T) {
-	mux := NewMux()
-	mux.Handle("/test", func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return nil
-	}, "GET")
-
-	req := httptest.NewRequest("GET", "/test?foo=bar&foo=baz&num=123", nil)
-	w := httptest.NewRecorder()
-	c := mux.NewContext(req, w)
-
-	params := c.QueryParams("foo", "url")
-	if len(params) != 2 {
-		t.Errorf("expected 2 params, got %d", len(params))
-	}
-	if params[0] != "bar" || params[1] != "baz" {
-		t.Errorf("expected [bar baz], got %v", params)
-	}
-
-	// 不存在的 key
-	if c.QueryParams("nonexist", "url") != nil {
-		t.Error("nonexist key should return nil")
-	}
-}
-
-func TestContext_QueryParam_Form(t *testing.T) {
+func TestContext_Bind(t *testing.T) {
 	mux := NewMux()
 	mux.Handle("/test", func(w http.ResponseWriter, r *http.Request, c *Context) error {
 		return nil
 	}, "POST")
 
-	req := httptest.NewRequest("POST", "/test", strings.NewReader("name=jane&age=30"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	w := httptest.NewRecorder()
-	c := mux.NewContext(req, w)
-
-	if c.QueryParam("name", "form", 0) != "jane" {
-		t.Error("QueryParam form failed")
-	}
-	if c.QueryParam("age", "form", 0) != "30" {
-		t.Error("QueryParam form age failed")
-	}
-}
-
-func TestContext_QueryParams_Form(t *testing.T) {
-	mux := NewMux()
-	mux.Handle("/test", func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return nil
-	}, "POST")
-
-	req := httptest.NewRequest("POST", "/test", strings.NewReader("tags=a&tags=b&tags=c"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	w := httptest.NewRecorder()
-	c := mux.NewContext(req, w)
-
-	params := c.QueryParams("tags", "form")
-	if len(params) != 3 {
-		t.Errorf("expected 3 params, got %d", len(params))
-	}
-}
-
-func TestContext_QueryParam_Json(t *testing.T) {
-	mux := NewMux()
-	mux.Handle("/test", func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return nil
-	}, "POST")
-
-	jsonBody := `{"name":"bob","age":35,"tags":["a","b"]}`
+	jsonBody := `{"username":"bob","password":"secret","age":35,"tags":["a","b"]}`
 	req := httptest.NewRequest("POST", "/test", strings.NewReader(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	c := mux.NewContext(req, w)
 
-	if c.QueryParam("name", "json", 0) != "bob" {
-		t.Error("QueryParam json failed")
+	var data struct {
+		Username string   `json:"username"`
+		Password string   `json:"password"`
+		Age      int      `json:"age"`
+		Tags     []string `json:"tags"`
 	}
-	if c.QueryParam("age", "json", 0) != "35" {
-		t.Error("QueryParam json age failed")
+	if err := c.Bind(&data); err != nil {
+		t.Fatalf("Bind failed: %v", err)
+	}
+	if data.Username != "bob" {
+		t.Errorf("expected username 'bob', got '%s'", data.Username)
+	}
+	if data.Password != "secret" {
+		t.Errorf("expected password 'secret', got '%s'", data.Password)
+	}
+	if data.Age != 35 {
+		t.Errorf("expected age 35, got %d", data.Age)
+	}
+	if len(data.Tags) != 2 || data.Tags[0] != "a" || data.Tags[1] != "b" {
+		t.Errorf("expected tags [a b], got %v", data.Tags)
 	}
 }
 
-func TestContext_QueryParams_Json(t *testing.T) {
+func TestContext_Bind_EmptyBody(t *testing.T) {
 	mux := NewMux()
 	mux.Handle("/test", func(w http.ResponseWriter, r *http.Request, c *Context) error {
 		return nil
 	}, "POST")
 
-	jsonBody := `{"tags":["x","y","z"]}`
-	req := httptest.NewRequest("POST", "/test", strings.NewReader(jsonBody))
+	req := httptest.NewRequest("POST", "/test", strings.NewReader(""))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	c := mux.NewContext(req, w)
 
-	params := c.QueryParams("tags", "json")
-	if len(params) != 3 {
-		t.Errorf("expected 3 params, got %d", len(params))
-	}
-	if params[0] != "x" || params[1] != "y" || params[2] != "z" {
-		t.Errorf("expected [x y z], got %v", params)
+	var data struct{ Name string }
+	if err := c.Bind(&data); err == nil {
+		t.Error("Bind with empty body should return error")
 	}
 }
 
-func TestContext_QueryParam_Json_Cache(t *testing.T) {
-	// 测试 JSON body 缓存 - 多次读取应该使用缓存
+func TestContext_Bind_InvalidJSON(t *testing.T) {
+	mux := NewMux()
+	mux.Handle("/test", func(w http.ResponseWriter, r *http.Request, c *Context) error {
+		return nil
+	}, "POST")
+
+	req := httptest.NewRequest("POST", "/test", strings.NewReader("{invalid json"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	c := mux.NewContext(req, w)
+
+	var data struct{ Name string }
+	if err := c.Bind(&data); err == nil {
+		t.Error("Bind with invalid JSON should return error")
+	}
+}
+
+func TestContext_Bind_Cache(t *testing.T) {
+	// 测试 body 缓存 - 多次 Bind 只读一次 Body
 	mux := NewMux()
 	mux.Handle("/test", func(w http.ResponseWriter, r *http.Request, c *Context) error {
 		return nil
@@ -301,13 +264,44 @@ func TestContext_QueryParam_Json_Cache(t *testing.T) {
 	w := httptest.NewRecorder()
 	c := mux.NewContext(req, w)
 
-	// 第一次读取
-	val1 := c.QueryParam("name", "json", 0)
-	// 第二次读取（应该使用缓存）
-	val2 := c.QueryParam("name", "json", 0)
+	var d1 struct{ Name string }
+	var d2 struct{ Name string }
+	if err := c.Bind(&d1); err != nil {
+		t.Fatalf("first Bind failed: %v", err)
+	}
+	if err := c.Bind(&d2); err != nil {
+		t.Fatalf("second Bind failed: %v", err)
+	}
+	if d1.Name != d2.Name {
+		t.Error("body cache not working - values differ")
+	}
+}
 
-	if val1 != val2 {
-		t.Error("JSON body cache not working - values differ")
+func TestContext_Bind_Concurrent(t *testing.T) {
+	// 验证并发场景下无数据竞争
+	mux := NewMux()
+	mux.Handle("/test", func(w http.ResponseWriter, r *http.Request, c *Context) error {
+		var data struct {
+			Name string `json:"name"`
+			Age  int    `json:"age"`
+		}
+		_ = c.Bind(&data)
+		return nil
+	}, "POST")
+
+	done := make(chan bool, 200)
+	for i := 0; i < 200; i++ {
+		go func() {
+			jsonBody := `{"name":"bob","age":35}`
+			req := httptest.NewRequest("POST", "/test", strings.NewReader(jsonBody))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+			done <- true
+		}()
+	}
+	for i := 0; i < 200; i++ {
+		<-done
 	}
 }
 

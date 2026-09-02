@@ -18,26 +18,35 @@ type Context struct {
 
 	Client  Client
 
+	// body 缓存当前请求的请求体原始字节（per-request，请求结束即释放）
+	// 避免 r.Body 流只能读一次的问题，供 Bind 复用
+	body []byte
 }
 
 type RouteMux struct {
 	treeNode      *Node
 	syncPool      sync.Pool
 	staticRoutes  map[string]map[string]HandleFunc // 精确路由缓存: path -> method -> handler
+	middlewares   []Middleware                     // 全局中间件（对所有路由生效）
 }
 
 
+// HandleFunc 业务处理函数签名（用户 handler 和中间件 next 的统一签名）
 type HandleFunc func(http.ResponseWriter, *http.Request, *Context) error
+
+// Middleware 中间件类型：接收 next handler，返回包装后的 handler
+// 洋葱模型：每个中间件可在 next 调用前后执行逻辑，也可不调 next 中断链路
+type Middleware func(next HandleFunc) HandleFunc
+
+// MiddlewareGroup 路由级中间件组，由 mux.Use() 返回
+// 通过 .Handle() 注册的路由会自动带上组内中间件
+type MiddlewareGroup struct {
+	mux         *RouteMux
+	middlewares []Middleware
+}
 
 
 type H map[string]interface{}
-
-
-type MidWare struct {
-	Before    []HandleFunc
-	Middle    []HandleFunc
-	After     []HandleFunc
-}
 
 
 //HTTP METHOD  "GET", "POST", "PUT", "DELETE", "HEAD", "PATCH", "OPTIONS", "CONNECT", "TRACE"
@@ -61,7 +70,7 @@ type (
 
 	}
 
-	NodeType   string  //root=>0 whole=>1 static=>2 param=>3 regexp=>4 default=>5
+	NodeType   string  // 节点类型: root(0) whole(1) static(2) param(3) regexp(4) default(5)
 
 	Children  []*Node
 

@@ -1,13 +1,13 @@
 package ning2
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"path"
 	"strconv"
@@ -235,110 +235,34 @@ func (c *Context) ClientIP() string {
 }
 
 
-// jsonBodyCache 用于缓存 JSON 请求体，避免重复读取
-var jsonBodyCache = make(map[*http.Request][]byte)
-
-func (c *Context) QueryParam(name string, flag string, index int) string {
-	switch flag {
-	case "url":
-		values := c.request.URL.Query()[name]
-		if values != nil && len(values) > index {
-			return values[index]
-		}
-
-	case "form":
-		_ = c.request.ParseForm()
-		values := c.request.Form[name]
-		if len(values) > index {
-			return values[index]
-		}
-
-	case "json":
-		// 尝试从缓存获取 body
-		var body []byte
-		if cached, ok := jsonBodyCache[c.request]; ok {
-			body = cached
-		} else {
-			var err error
-			body, err = io.ReadAll(c.request.Body)
-			if err != nil {
-				log.Println("Read body error:", err)
-				return ""
-			}
-			// 缓存 body 并重新填充
-			jsonBodyCache[c.request] = body
-			c.request.Body = io.NopCloser(strings.NewReader(string(body)))
-		}
-
-		var jsonData map[string]interface{}
-		if err := json.Unmarshal(body, &jsonData); err != nil {
-			log.Println("JSON parse error:", err)
-			return ""
-		}
-		if val, ok := jsonData[name]; ok {
-			return fmt.Sprintf("%v", val)
-		}
-
-	default:
-		log.Println("QueryParam: unknown flag", flag)
+// Bind 将请求 JSON body 解析到任意结构体指针
+// 自包含实现：读 Body → 缓存 → 解析，不依赖其他函数
+// 同一次请求内多次调用只读一次 Body（后续走 c.body 缓存）
+// 例：var req LoginReq; if err := c.Bind(&req); err != nil { ... }
+func (c *Context) Bind(ptr interface{}) error {
+	// 有缓存直接用，不重复读 Body
+	if c.body != nil {
+		return json.Unmarshal(c.body, ptr)
 	}
-
-	return ""
+	body, err := io.ReadAll(c.request.Body)
+	if err != nil {
+		return err
+	}
+	if len(body) == 0 {
+		return errors.New("empty body")
+	}
+	// 缓存原始字节并回填 Body
+	c.body = body
+	c.request.Body = io.NopCloser(bytes.NewReader(body))
+	return json.Unmarshal(body, ptr)
 }
 
-func (c *Context) QueryParams(name string, flag string) []string {
-	switch flag {
-	case "url":
-		values := c.request.URL.Query()[name]
-		if values != nil {
-			return values
-		}
-
-	case "form":
-		_ = c.request.ParseForm()
-		values := c.request.PostForm[name]
-		if values != nil {
-			return values
-		}
-
-	case "json":
-		// 尝试从缓存获取 body
-		var body []byte
-		if cached, ok := jsonBodyCache[c.request]; ok {
-			body = cached
-		} else {
-			var err error
-			body, err = io.ReadAll(c.request.Body)
-			if err != nil {
-				log.Println("Read body error:", err)
-				return nil
-			}
-			// 缓存 body 并重新填充
-			jsonBodyCache[c.request] = body
-			c.request.Body = io.NopCloser(strings.NewReader(string(body)))
-		}
-
-		var jsonData map[string]interface{}
-		if err := json.Unmarshal(body, &jsonData); err != nil {
-			log.Println("JSON parse error:", err)
-			return nil
-		}
-		if val, ok := jsonData[name]; ok {
-			if arr, ok := val.([]interface{}); ok {
-				result := make([]string, len(arr))
-				for i, v := range arr {
-					result[i] = fmt.Sprintf("%v", v)
-				}
-				return result
-			}
-			return []string{fmt.Sprintf("%v", val)}
-		}
-
-	default:
-		log.Println("QueryParams: unknown flag", flag)
-	}
-
-	return nil
+// Query 获取 URL 查询参数（单值，返回第一个）
+// 底层调用 c.request.URL.Query()，Go 标准库已做缓存
+// 不存在时返回空字符串
+// 例：q := c.Query("q")
+func (c *Context) Query(name string) string {
+	return c.request.URL.Query().Get(name)
 }
 
 

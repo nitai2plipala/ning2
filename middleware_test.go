@@ -7,361 +7,451 @@ import (
 	"testing"
 )
 
-// ==================== Middleware 基础测试 ====================
+// ==================== 内置中间件测试 ====================
 
-func TestNewMidWare(t *testing.T) {
-	m := NewMidWare()
-	if m == nil {
-		t.Fatal("NewMidWare returned nil")
-	}
-	if m.Before == nil {
-		t.Error("Before slice not initialized")
-	}
-	if m.After == nil {
-		t.Error("After slice not initialized")
-	}
-}
-
-func TestMidWare_UseBefore(t *testing.T) {
-	m := NewMidWare()
-
-	middleware := func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return nil
-	}
-
-	m.UseBefore(middleware)
-
-	if len(m.Before) != 1 {
-		t.Errorf("expected 1 before middleware, got %d", len(m.Before))
-	}
-}
-
-func TestMidWare_UseAfter(t *testing.T) {
-	m := NewMidWare()
-
-	middleware := func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return nil
-	}
-
-	m.UseAfter(middleware)
-
-	if len(m.After) != 1 {
-		t.Errorf("expected 1 after middleware, got %d", len(m.After))
-	}
-}
-
-func TestMidWare_UseBefore_Multiple(t *testing.T) {
-	m := NewMidWare()
-
-	m.UseBefore(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return nil
-	})
-	m.UseBefore(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return nil
-	})
-	m.UseBefore(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return nil
-	})
-
-	if len(m.Before) != 3 {
-		t.Errorf("expected 3 before middlewares, got %d", len(m.Before))
-	}
-}
-
-func TestMidWare_UseAfter_Multiple(t *testing.T) {
-	m := NewMidWare()
-
-	m.UseAfter(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return nil
-	})
-	m.UseAfter(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return nil
-	})
-
-	if len(m.After) != 2 {
-		t.Errorf("expected 2 after middlewares, got %d", len(m.After))
-	}
-}
-
-// ==================== Middleware 执行顺序测试 ====================
-
-func TestMidWare_Handler_Order(t *testing.T) {
-	m := NewMidWare()
-
-	callOrder := []string{}
-
-	// 添加前置中间件
-	m.UseBefore(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		callOrder = append(callOrder, "before1")
-		return nil
-	})
-	m.UseBefore(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		callOrder = append(callOrder, "before2")
-		return nil
-	})
-
-	// 添加后置中间件
-	m.UseAfter(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		callOrder = append(callOrder, "after1")
-		return nil
-	})
-	m.UseAfter(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		callOrder = append(callOrder, "after2")
-		return nil
-	})
-
-	// 创建测试 handler
+func TestRecovery_NoPanic(t *testing.T) {
+	called := false
 	handler := func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		callOrder = append(callOrder, "handler")
+		called = true
 		return nil
 	}
 
-	// 创建测试请求
+	wrapped := Recovery(handler)
 	req := httptest.NewRequest("GET", "/test", nil)
 	w := httptest.NewRecorder()
-	c := &Context{responseWriter: w, request: req}
+	c := &Context{responseWriter: NewResponseWriter(w), request: req, Param: map[string]string{}}
 
-	// 执行中间件链
-	err := m.Handler(w, req, c, handler)
+	err := wrapped(w, req, c)
 	if err != nil {
-		t.Errorf("Handler returned error: %v", err)
+		t.Errorf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Error("handler was not called")
+	}
+}
+
+func TestRecovery_CatchesPanic(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request, c *Context) error {
+		panic("test panic")
 	}
 
-	// 验证执行顺序 - 实际实现是后进先出
-	expected := []string{"before2", "before1", "handler", "after2", "after1"}
-	if len(callOrder) != len(expected) {
-		t.Errorf("expected call order length %d, got %d", len(expected), len(callOrder))
+	wrapped := Recovery(handler)
+	req := httptest.NewRequest("GET", "/test", nil)
+	w := httptest.NewRecorder()
+	c := &Context{responseWriter: NewResponseWriter(w), request: req, Param: map[string]string{}}
+
+	err := wrapped(w, req, c)
+	if err != nil {
+		t.Errorf("Recovery should not return error for panic, got: %v", err)
+	}
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %d", w.Code)
+	}
+}
+
+func TestRequestID_SetsHeader(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request, c *Context) error {
+		rid := c.Param["request_id"]
+		if rid == "" {
+			t.Error("request_id not set in context")
+		}
+		return nil
+	}
+
+	wrapped := RequestID(handler)
+	req := httptest.NewRequest("GET", "/test", nil)
+	w := httptest.NewRecorder()
+	c := &Context{responseWriter: NewResponseWriter(w), request: req, Param: map[string]string{}}
+
+	wrapped(w, req, c)
+
+	rid := w.Header().Get("X-Request-ID")
+	if rid == "" {
+		t.Error("X-Request-ID header not set")
+	}
+}
+
+// ==================== chain 工具函数测试 ====================
+
+func TestChain_Order(t *testing.T) {
+	var order []string
+
+	mw1 := func(next HandleFunc) HandleFunc {
+		return func(w http.ResponseWriter, r *http.Request, c *Context) error {
+			order = append(order, "mw1-before")
+			err := next(w, r, c)
+			order = append(order, "mw1-after")
+			return err
+		}
+	}
+	mw2 := func(next HandleFunc) HandleFunc {
+		return func(w http.ResponseWriter, r *http.Request, c *Context) error {
+			order = append(order, "mw2-before")
+			err := next(w, r, c)
+			order = append(order, "mw2-after")
+			return err
+		}
+	}
+	handler := func(w http.ResponseWriter, r *http.Request, c *Context) error {
+		order = append(order, "handler")
+		return nil
+	}
+
+	wrapped := chain(handler, mw1, mw2)
+	req := httptest.NewRequest("GET", "/test", nil)
+	w := httptest.NewRecorder()
+	c := &Context{responseWriter: NewResponseWriter(w), request: req, Param: map[string]string{}}
+
+	wrapped(w, req, c)
+
+	expected := []string{"mw1-before", "mw2-before", "handler", "mw2-after", "mw1-after"}
+	if len(order) != len(expected) {
+		t.Fatalf("expected %d calls, got %d: %v", len(expected), len(order), order)
 	}
 	for i, exp := range expected {
-		if i >= len(callOrder) {
-			t.Errorf("missing call at index %d: expected %s", i, exp)
-			continue
-		}
-		if callOrder[i] != exp {
-			t.Errorf("at index %d: expected %s, got %s", i, exp, callOrder[i])
+		if order[i] != exp {
+			t.Errorf("at index %d: expected %s, got %s", i, exp, order[i])
 		}
 	}
 }
 
-func TestMidWare_Handler_BeforeError(t *testing.T) {
-	m := NewMidWare()
-
-	// 前置中间件返回错误
-	m.UseBefore(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return &testMiddlewareError{"before error"}
-	})
-
+func TestChain_Empty(t *testing.T) {
+	called := false
 	handler := func(w http.ResponseWriter, r *http.Request, c *Context) error {
+		called = true
 		return nil
 	}
 
+	wrapped := chain(handler)
 	req := httptest.NewRequest("GET", "/test", nil)
 	w := httptest.NewRecorder()
-	c := &Context{responseWriter: w, request: req}
+	c := &Context{responseWriter: NewResponseWriter(w), request: req, Param: map[string]string{}}
 
-	err := m.Handler(w, req, c, handler)
-	if err == nil {
-		t.Error("Expected error to be propagated")
+	wrapped(w, req, c)
+	if !called {
+		t.Error("handler was not called")
 	}
 }
 
-func TestMidWare_Handler_AfterError(t *testing.T) {
-	m := NewMidWare()
+// ==================== 中间件中断测试 ====================
 
-	// 后置中间件返回错误
-	m.UseAfter(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return &testMiddlewareError{"after error"}
-	})
+func TestMiddleware_Abort(t *testing.T) {
+	handlerCalled := false
 
+	authMw := func(next HandleFunc) HandleFunc {
+		return func(w http.ResponseWriter, r *http.Request, c *Context) error {
+			// 不调 next，直接返回，模拟鉴权失败
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return nil
+		}
+	}
 	handler := func(w http.ResponseWriter, r *http.Request, c *Context) error {
+		handlerCalled = true
 		return nil
 	}
 
+	wrapped := chain(handler, authMw)
 	req := httptest.NewRequest("GET", "/test", nil)
 	w := httptest.NewRecorder()
-	c := &Context{responseWriter: w, request: req}
+	c := &Context{responseWriter: NewResponseWriter(w), request: req, Param: map[string]string{}}
 
-	err := m.Handler(w, req, c, handler)
-	if err == nil {
-		t.Error("Expected error to be propagated from after middleware")
+	wrapped(w, req, c)
+
+	if handlerCalled {
+		t.Error("handler should not be called when middleware aborts")
+	}
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401, got %d", w.Code)
 	}
 }
 
-func TestMidWare_Handler_Context(t *testing.T) {
-	m := NewMidWare()
+// ==================== Mux 集成测试 ====================
 
-	var capturedPattern string
-
-	m.UseBefore(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		capturedPattern = c.Pattern
-		c.Param["middleware"] = "set"
-		return nil
-	})
-
-	handler := func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return c.String(200, c.Param["middleware"])
-	}
-
-	req := httptest.NewRequest("GET", "/test", nil)
-	w := httptest.NewRecorder()
-	c := &Context{
-		responseWriter: w,
-		request:        req,
-		Pattern:        "/test",
-		Param:          make(map[string]string),
-	}
-
-	err := m.Handler(w, req, c, handler)
-	if err != nil {
-		t.Errorf("Handler returned error: %v", err)
-	}
-
-	if capturedPattern != "/test" {
-		t.Errorf("expected pattern /test, got %s", capturedPattern)
-	}
-	// 验证 middleware 设置的参数被 handler 使用
-	if w.Body.String() != "set" {
-		t.Errorf("expected body 'set', got '%s'", w.Body.String())
-	}
-}
-
-// ==================== Middleware 与 Mux 集成测试 ====================
-
-func TestMiddleware_WithMux(t *testing.T) {
+func TestMux_Middleware_Global(t *testing.T) {
 	mux := NewMux()
-	middleware := NewMidWare()
 
-	callOrder := []string{}
+	var order []string
 
-	// 添加中间件
-	middleware.UseBefore(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		callOrder = append(callOrder, "before")
-		return nil
-	})
+	// 全局中间件
+	mux.Middleware(
+		func(next HandleFunc) HandleFunc {
+			return func(w http.ResponseWriter, r *http.Request, c *Context) error {
+				order = append(order, "g1-before")
+				err := next(w, r, c)
+				order = append(order, "g1-after")
+				return err
+			}
+		},
+		func(next HandleFunc) HandleFunc {
+			return func(w http.ResponseWriter, r *http.Request, c *Context) error {
+				order = append(order, "g2-before")
+				err := next(w, r, c)
+				order = append(order, "g2-after")
+				return err
+			}
+		},
+	)
 
-	// 注册路由
 	mux.Handle("/test", func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		callOrder = append(callOrder, "handler")
+		order = append(order, "handler")
 		return c.String(200, "ok")
 	}, "GET")
 
-	// 创建测试请求
 	req := httptest.NewRequest("GET", "/test", nil)
 	w := httptest.NewRecorder()
-	c := mux.NewContext(req, w)
+	mux.ServeHTTP(w, req)
 
-	// 获取 handler 并应用中间件
-	handler := mux.FindHandle(req, c)
-	wrappedHandler := middleware.Handler
-
-	// 模拟完整的请求处理流程
-	_ = wrappedHandler(w, req, c, handler)
-
-	if len(callOrder) != 2 {
-		t.Errorf("expected 2 calls, got %d: %v", len(callOrder), callOrder)
+	expected := []string{"g1-before", "g2-before", "handler", "g2-after", "g1-after"}
+	if len(order) != len(expected) {
+		t.Fatalf("expected %d calls, got %d: %v", len(expected), len(order), order)
 	}
-	if callOrder[0] != "before" {
-		t.Error("before middleware should execute first")
-	}
-	if callOrder[1] != "handler" {
-		t.Error("handler should execute after middleware")
+	for i, exp := range expected {
+		if order[i] != exp {
+			t.Errorf("at index %d: expected %s, got %s", i, exp, order[i])
+		}
 	}
 }
 
-// ==================== 辅助类型 ====================
+func TestMux_Use_RouteScoped(t *testing.T) {
+	mux := NewMux()
 
-type testMiddlewareError struct {
-	message string
-}
+	var order []string
 
-func (e *testMiddlewareError) Error() string {
-	return e.message
-}
-
-// ==================== 性能基准测试 ====================
-
-func BenchmarkMiddleware_Single(b *testing.B) {
-	m := NewMidWare()
-	m.UseBefore(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return nil
-	})
-
-	handler := func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return nil
+	authMw := func(next HandleFunc) HandleFunc {
+		return func(w http.ResponseWriter, r *http.Request, c *Context) error {
+			order = append(order, "auth-before")
+			err := next(w, r, c)
+			order = append(order, "auth-after")
+			return err
+		}
 	}
 
-	req := httptest.NewRequest("GET", "/test", nil)
+	// 路由级中间件，只对 /admin 生效
+	mux.Use(authMw).Handle("/admin", func(w http.ResponseWriter, r *http.Request, c *Context) error {
+		order = append(order, "admin-handler")
+		return c.String(200, "admin")
+	}, "GET")
+
+	// 普通路由，不受路由级中间件影响
+	mux.Handle("/hello", func(w http.ResponseWriter, r *http.Request, c *Context) error {
+		order = append(order, "hello-handler")
+		return c.String(200, "hello")
+	}, "GET")
+
+	// 请求 /admin
+	req := httptest.NewRequest("GET", "/admin", nil)
 	w := httptest.NewRecorder()
-	c := &Context{responseWriter: w, request: req}
+	mux.ServeHTTP(w, req)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		m.Handler(w, req, c, handler)
+	// 请求 /hello
+	req2 := httptest.NewRequest("GET", "/hello", nil)
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+
+	expected := []string{"auth-before", "admin-handler", "auth-after", "hello-handler"}
+	if len(order) != len(expected) {
+		t.Fatalf("expected %d calls, got %d: %v", len(expected), len(order), order)
+	}
+	for i, exp := range expected {
+		if order[i] != exp {
+			t.Errorf("at index %d: expected %s, got %s", i, exp, order[i])
+		}
 	}
 }
 
-func BenchmarkMiddleware_Multiple(b *testing.B) {
-	m := NewMidWare()
-	for i := 0; i < 5; i++ {
-		m.UseBefore(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-			return nil
-		})
-		m.UseAfter(func(w http.ResponseWriter, r *http.Request, c *Context) error {
-			return nil
-		})
+func TestMux_Use_Group(t *testing.T) {
+	mux := NewMux()
+
+	var order []string
+
+	authMw := func(next HandleFunc) HandleFunc {
+		return func(w http.ResponseWriter, r *http.Request, c *Context) error {
+			order = append(order, "auth")
+			return next(w, r, c)
+		}
+	}
+	logMw := func(next HandleFunc) HandleFunc {
+		return func(w http.ResponseWriter, r *http.Request, c *Context) error {
+			order = append(order, "log")
+			return next(w, r, c)
+		}
 	}
 
-	handler := func(w http.ResponseWriter, r *http.Request, c *Context) error {
-		return nil
-	}
+	// group 复用中间件
+	group := mux.Use(authMw, logMw)
+	group.Handle("/api/v1/users", func(w http.ResponseWriter, r *http.Request, c *Context) error {
+		order = append(order, "users-handler")
+		return c.String(200, "users")
+	}, "GET")
+	group.Handle("/api/v1/settings", func(w http.ResponseWriter, r *http.Request, c *Context) error {
+		order = append(order, "settings-handler")
+		return c.String(200, "settings")
+	}, "GET")
 
-	req := httptest.NewRequest("GET", "/test", nil)
+	// 请求第一条路由
+	req := httptest.NewRequest("GET", "/api/v1/users", nil)
 	w := httptest.NewRecorder()
-	c := &Context{responseWriter: w, request: req}
+	mux.ServeHTTP(w, req)
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		m.Handler(w, req, c, handler)
+	// 请求第二条路由
+	req2 := httptest.NewRequest("GET", "/api/v1/settings", nil)
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+
+	expected := []string{"auth", "log", "users-handler", "auth", "log", "settings-handler"}
+	if len(order) != len(expected) {
+		t.Fatalf("expected %d calls, got %d: %v", len(expected), len(order), order)
+	}
+	for i, exp := range expected {
+		if order[i] != exp {
+			t.Errorf("at index %d: expected %s, got %s", i, exp, order[i])
+		}
 	}
 }
+
+func TestMux_Use_ChainOnGroup(t *testing.T) {
+	mux := NewMux()
+
+	var order []string
+
+	baseMw := func(next HandleFunc) HandleFunc {
+		return func(w http.ResponseWriter, r *http.Request, c *Context) error {
+			order = append(order, "base")
+			return next(w, r, c)
+		}
+	}
+	extraMw := func(next HandleFunc) HandleFunc {
+		return func(w http.ResponseWriter, r *http.Request, c *Context) error {
+			order = append(order, "extra")
+			return next(w, r, c)
+		}
+	}
+
+	// group 叠加中间件
+	base := mux.Use(baseMw)
+	super := base.Use(extraMw)
+	super.Handle("/super", func(w http.ResponseWriter, r *http.Request, c *Context) error {
+		order = append(order, "handler")
+		return c.String(200, "super")
+	}, "GET")
+
+	req := httptest.NewRequest("GET", "/super", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	expected := []string{"base", "extra", "handler"}
+	if len(order) != len(expected) {
+		t.Fatalf("expected %d calls, got %d: %v", len(expected), len(order), order)
+	}
+	for i, exp := range expected {
+		if order[i] != exp {
+			t.Errorf("at index %d: expected %s, got %s", i, exp, order[i])
+		}
+	}
+}
+
 // ==================== Resource 静态文件服务测试 ====================
 
 func TestResource_Basic(t *testing.T) {
 	mux := NewMux()
-	
+
 	// 创建临时目录和文件
 	tmpDir := t.TempDir()
 	os.WriteFile(tmpDir+"/test.txt", []byte("hello"), 0644)
-	
+
 	// 测试 Resource 注册
 	err := mux.Resource("/static/", tmpDir)
 	if err != nil {
 		t.Errorf("Resource failed: %v", err)
 	}
-	
+
 	// 测试请求
 	req := httptest.NewRequest("GET", "/static/test.txt", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
-	
+
 	if w.Code != 200 {
 		t.Errorf("expected status 200, got %d", w.Code)
 	}
 }
 
 func TestResource_RootPath(t *testing.T) {
-	// 根路径静态文件服务需要通配符路由正确匹配
-	// 由于路由匹配优先级问题，暂时跳过此测试
-	// 基本静态文件服务 TestResource_Basic 已通过
-	t.Skip("Skipping root path test due to router priority issue")
+	// 根路径静态文件服务测试
+	tmpDir := t.TempDir()
+	os.WriteFile(tmpDir+"/test.txt", []byte("hello root"), 0644)
+
+	mux := NewMux()
+	err := mux.Resource("/", tmpDir)
+	if err != nil {
+		t.Fatalf("Resource failed: %v", err)
+	}
+
+	// 访问根路径下的文件
+	req := httptest.NewRequest("GET", "/test.txt", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+	if w.Body.String() != "hello root" {
+		t.Errorf("expected body 'hello root', got '%s'", w.Body.String())
+	}
 }
 
 func TestResource_InvalidPattern(t *testing.T) {
 	mux := NewMux()
-	
+
 	// 测试无效模式（不以 / 结尾）
 	err := mux.Resource("/static", "./public")
 	if err == nil {
 		t.Error("expected error for invalid pattern")
+	}
+}
+
+// ==================== 性能基准测试 ====================
+
+func BenchmarkMiddleware_Single(b *testing.B) {
+	mw := func(next HandleFunc) HandleFunc {
+		return func(w http.ResponseWriter, r *http.Request, c *Context) error {
+			return next(w, r, c)
+		}
+	}
+	handler := func(w http.ResponseWriter, r *http.Request, c *Context) error {
+		return nil
+	}
+	wrapped := chain(handler, mw)
+
+	req := httptest.NewRequest("GET", "/test", nil)
+	w := httptest.NewRecorder()
+	c := &Context{responseWriter: NewResponseWriter(w), request: req, Param: map[string]string{}}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		wrapped(w, req, c)
+	}
+}
+
+func BenchmarkMiddleware_Multiple(b *testing.B) {
+	mws := make([]Middleware, 0, 10)
+	for i := 0; i < 5; i++ {
+		mws = append(mws, func(next HandleFunc) HandleFunc {
+			return func(w http.ResponseWriter, r *http.Request, c *Context) error {
+				return next(w, r, c)
+			}
+		})
+	}
+	handler := func(w http.ResponseWriter, r *http.Request, c *Context) error {
+		return nil
+	}
+	wrapped := chain(handler, mws...)
+
+	req := httptest.NewRequest("GET", "/test", nil)
+	w := httptest.NewRecorder()
+	c := &Context{responseWriter: NewResponseWriter(w), request: req, Param: map[string]string{}}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		wrapped(w, req, c)
 	}
 }

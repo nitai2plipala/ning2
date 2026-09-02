@@ -21,8 +21,8 @@ import (
 func main() {
     mux := ning2.NewMux()
     
-    // Enable Gzip compression
-    mux.Use(ning2.CompressionMiddleware)
+    // Global middleware (applies to all routes)
+    mux.Middleware(ning2.Recovery, ning2.Logger, ning2.RequestID)
     
     // Basic route - GET
     mux.Handle("/hello", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
@@ -35,26 +35,50 @@ func main() {
         return c.JSON(200, map[string]string{"user_id": userID})
     }, "GET")
     
+    // Multi-level parameters - /user/123/post/456
+    mux.Handle("/user/:userId/post/:postId", handler, "GET")
+    
+    // Regexp route - only matches numbers
+    mux.Handle("/items/<id>[0-9]+", handler, "GET")
+    // Matches /items/123 but not /items/abc
+    
     // Multiple HTTP methods
     mux.Handle("/api/data", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
         return c.JSON(200, map[string]string{"status": "ok"})
     }, "GET", "POST", "PUT", "DELETE")
     
     // Wildcard route - /files/*
-    mux.Handle("/files/*path", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
+    mux.Handle("/files/*", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
         return c.String(200, "File: "+c.Param["path"])
     }, "GET")
     
     // Query parameters
     mux.Handle("/search", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
-        query := c.QueryParam("q", "url", 0)
+        query := c.Query("q")
         return c.JSON(200, map[string]string{"query": query})
     }, "GET")
+    
+    // JSON body binding
+    mux.Handle("/login", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
+        var req struct {
+            Username string `json:"username"`
+            Password string `json:"password"`
+        }
+        if err := c.Bind(&req); err != nil {
+            return c.Error(400, err)
+        }
+        return c.JSON(200, map[string]string{"username": req.Username})
+    }, "POST")
     
     // HTML response
     mux.Handle("/page", func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
         return c.HTML(200, "<html><body><h1>Hello World</h1></body></html>")
     }, "GET")
+    
+    // Route-scoped middleware (only applies to matched routes)
+    mux.Use(AuthMiddleware).Handle("/admin", handler, "GET")
+    // Compression should be placed innermost (closest to handler)
+    mux.Use(AuthMiddleware, ning2.Compression).Handle("/api/data", handler, "GET")
     
     // Static file serving
     mux.Resource("/static/", "./public")  // /static/* -> ./public/*
@@ -68,11 +92,11 @@ func main() {
 
 | Feature | Description |
 |---------|-------------|
-| Routing | Static, parameter, wildcard, regexp routes |
+| Routing | Prefix-shared tree, Static, parameter, wildcard, regexp routes with priority |
 | Response | String, JSON, HTML, File, Redirect |
-| Middleware | Before, After, Middle hooks |
+| Middleware | Onion model, Global + route-scoped middleware with priority |
 | Compression | Gzip response compression |
-| Context | Query, Form, JSON params |
+| Context | Query (URL params), Bind (JSON body to struct) |
 
 ## Modules
 
@@ -83,8 +107,8 @@ func main() {
 
 ## Documentation
 
-- [Ning2 Framework Docs](./ning2.md)
-- [Spider Crawler Docs](./spider.md)
+- [Ning2 Framework Docs](./docs/ning2.md)
+- [Spider Crawler Docs](./docs/spider.md)
 
 ## Testing
 

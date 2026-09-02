@@ -71,8 +71,9 @@ mux.Handle("/users/:userId/posts/:postId", handler, "GET")
 
 ```go
 // Match remaining path
-mux.Handle("/api/*path", handler, "GET")
+mux.Handle("/api/*", handler, "GET")
 // Access /api/v1/users -> c.Param["path"] = "v1/users"
+// "path" is the internal fixed key name, hidden from users
 ```
 
 ### Regexp Routes
@@ -86,9 +87,12 @@ mux.Handle("/items/<id>[0-9]+", handler, "GET")
 ### Static Alias Routes
 
 ```go
-// Static route /?alias
+// Static route /?alias - matches the entire remaining path
 mux.Handle("/static/?file", handler, "GET")
 // Access /static/js/app.js -> c.Param["file"] = "js/app.js"
+//
+// Note: static routes have priority 2 (lower than param/regexp/default)
+// so they are typically used for catch-all alias scenarios
 ```
 
 ### Static File Serving
@@ -99,18 +103,23 @@ mux.Resource("/static/", "./static")    // /static/* -> ./static/*
 mux.Resource("/", "./public")           // /* -> ./public/*
 
 // Or use StripPrefix directly
-mux.Handle("/static/*filepath", ning2.StripPrefix("/static", "./static"), "GET")
-mux.Handle("/*filepath", ning2.StripPrefix("", "./public"), "GET")
+mux.Handle("/static/*", ning2.StripPrefix("/static", "./static"), "GET")
+mux.Handle("/*", ning2.StripPrefix("", "./public"), "GET")
 ```
 
 ### Route Priority
 
-1. Exact routes (priority: 10)
-2. Default type (priority: 5)
-3. Regexp type (priority: 4)
-4. Param type (priority: 3)
-5. Static type (priority: 2)
-6. Whole type (priority: 1)
+When multiple routes match the same URL, the router selects the handler with the highest priority:
+
+| Priority | Type | Value | Description |
+|----------|------|-------|-------------|
+| 1 (highest) | `default` | 5 | Exact path segment, e.g. `/users` |
+| 2 | `regexp` | 4 | Regex match segment, e.g. `/<id>[0-9]+` |
+| 3 | `param` | 3 | Named parameter, e.g. `/:id` |
+| 4 | `static` | 2 | Alias for remaining path, e.g. `/?file` |
+| 5 (lowest) | `whole` | 1 | Wildcard for remaining path, e.g. `/*` |
+
+**Example**: Given routes `/files/*` and `/files/static`, a request to `/files/static` matches the `default` route (priority 5) over the `whole` route (priority 1).
 
 ## Context
 
@@ -126,14 +135,23 @@ mux.ServeHTTP(w, r)
 
 ```go
 // URL Query parameters
-name := c.QueryParam("name", "url", 0)
-names := c.QueryParams("name", "url")
+name := c.Query("name")
 
-// Form parameters
-name := c.QueryParam("name", "form", 0)
+// JSON body binding (strongly typed)
+var req struct {
+    Username string `json:"username"`
+    Password string `json:"password"`
+    Age      int    `json:"age"`
+    Tags     []string `json:"tags"`
+}
+if err := c.Bind(&req); err != nil {
+    return c.Error(400, err)
+}
+// req.Username, req.Password, req.Age, req.Tags
 
-// JSON parameters
-name := c.QueryParam("name", "json", 0)
+// Form parameters (use standard library)
+r.ParseForm()
+username := r.PostForm.Get("username")
 ```
 
 ### Client Information
@@ -158,52 +176,113 @@ c.Client.Standard  // Client standard: .m (mobile), .t (tablet), .p (desktop)
 
 ## Middleware
 
-### Creating Middleware
+Ning2 采用洋葱模型（Onion Model）中间件，`HandleFunc` 签名不变，中间件通过包装函数 `Middleware` 实现。
+
+### Middleware Type
 
 ```go
-m := ning2.NewMidWare()
-
-// Add before middleware (executes before request)
-m.UseBefore(func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
-    // Pre-request logic
-    return nil
-})
-
-// Add after middleware (executes after response)
-m.UseAfter(func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
-    // Post-response logic
-    return nil
-})
-
-// Add general middleware
-m.Use(func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
-    return nil
-})
+// Middleware 包装一个 handler，返回新的 handler
+type Middleware func(next HandleFunc) HandleFunc
 ```
 
-### Using Middleware
+每个中间件可在 `next` 调用前后执行逻辑，也可不调 `next` 中断链路。
+
+### Global Middleware
+
+`mux.Middleware(mw...)` 注册全局中间件，对所有路由生效：
 
 ```go
-// Add to mux
-mux.Use(ning2.CompressionMiddleware)
-
-// Or use MidWare chain
-m := ning2.NewMidWare()
-m.UseBefore(beforeFn)
-m.UseAfter(afterFn)
+// 全局中间件，执行顺序：书写顺序从外到内
+mux.Middleware(ning2.Recovery, ning2.Logger, ning2.RequestID)
 ```
+
+### Route-Scoped Middleware
+
+`mux.Use(mw...)` 返回 `*MiddlewareGroup`，通过 `.Handle()` 注册的路由带上组内中间件，只对选中路由生效：
+
+```go
+// 单个路由级中间件
+mux.Use(Auth).Handle("/admin", handler, "GET")
+
+// 多个路由级中间件（书写顺序 = 从外到内执行顺序）
+mux.Use(Auth, RateLimit).Handle("/api/secret", handler, "GET")
+
+// 分组复用：同一组中间件应用到多条路由
+adminGroup := mux.Use(Auth, RateLimit)
+adminGroup.Handle("/admin/users", handler1, "GET")
+adminGroup.Handle("/admin/settings", handler2, "GET")
+
+// group 继续叠加中间件
+superAdmin := adminGroup.Use(AdminOnly)
+superAdmin.Handle("/admin/super", handler3, "GET")
+```
+
+### Execution Order (Onion Model)
+
+全局中间件在最外层，路由级中间件在中间，handler 在核心：
+
+```
+请求 → Recovery(外) → Logger → RequestID → Auth → RateLimit → handler
+                                                          ↓
+响应 ← Recovery(内) ← Logger ← RequestID ← Auth ← RateLimit ← 
+```
+
+### Writing Custom Middleware
+
+```go
+// 洋葱型：前置 + 后置
+func Logger(next ning2.HandleFunc) ning2.HandleFunc {
+    return func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
+        start := time.Now()
+        // 前半
+        err := next(w, r, c)  // 调用下一层
+        // 后半
+        log.Printf("%s %s %v", r.Method, r.URL.Path, time.Since(start))
+        return err
+    }
+}
+
+// 门卫型：不调 next 中断
+func Auth(next ning2.HandleFunc) ning2.HandleFunc {
+    return func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
+        if r.Header.Get("Authorization") != "Bearer token" {
+            http.Error(w, "Unauthorized", 401)
+            return nil  // 不调 next，链路中断
+        }
+        return next(w, r, c)
+    }
+}
+
+// 变换型：替换 writer
+func Compression(next ning2.HandleFunc) ning2.HandleFunc {
+    return func(w http.ResponseWriter, r *http.Request, c *ning2.Context) error {
+        gw := gzip.NewWriter(w)
+        c.responseWriter = &CompressWriter{Writer: gw, ResponseWriter: w}
+        err := next(w, r, c)  // handler 写数据进 gw
+        gw.Close()            // 后半：刷出压缩数据
+        return err
+    }
+}
+```
+
+### Middleware Ordering Guide
+
+| Layer | Type | Example | Position |
+|-------|------|---------|----------|
+| Outermost | Rescue | Recovery | Global |
+| Outer | Observer | Logger, RequestID | Global |
+| Middle | Guard | Auth, RateLimit, CORS | Route-scoped |
+| Innermost | Transformer | Compression | Route-scoped, last |
+
+**Key**: Transformer middleware (Compression) should be placed innermost (closest to handler), so error responses (e.g. 401 from Auth) are not needlessly compressed.
 
 ### Built-in Middleware
 
 ```go
-// Gzip compression (enable with mux.Use(ning2.CompressionMiddleware))
-ning2.CompressionMiddleware
-
-// Logger middleware
-ning2.LoggerMiddleware
-
-// Recovery middleware (prevents panic crash)
-ning2.RecoveryMiddleware
+ning2.Recovery     // 兑底型：捕获 panic
+ning2.Logger        // 观察型：记录请求日志和耗时
+ning2.RequestID     // 观察型：生成请求唯一ID
+ning2.Compression   // 变换型：gzip 压缩（放路由级最内层）
 ```
 
 ## User-Agent
@@ -302,10 +381,10 @@ Built-in template functions:
 
 ```go
 // Simple static file serving
-mux.Handle("/static/*filepath", ning2.StripPrefix("/static", "./static"), "GET")
+mux.Handle("/static/*", ning2.StripPrefix("/static", "./static"), "GET")
 
 // Or use standard library
-mux.Handle("/files/*filepath", http.FileServer(http.Dir("./files")), "GET")
+mux.Handle("/files/*", http.FileServer(http.Dir("./files")), "GET")
 ```
 
 ### HTTPS Redirect
@@ -361,5 +440,5 @@ type Client struct {
 - **Route Cache**: Exact routes use O(1) cache lookup
 - **Regexp Cache**: Regex expression compilation results cached
 - **Context Pool**: Use sync.Pool to reuse Context objects
-- **Body Cache**: JSON request body read only once
+- **Body Cache**: Request body read only once per request (cached in Context.body, auto-released with pool)
 - **FuncMap Cache**: Template function map created globally only once
